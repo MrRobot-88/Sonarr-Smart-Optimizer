@@ -2,7 +2,7 @@
 
 A small Python tool that searches your **existing Sonarr library** for smaller replacement releases while applying safety checks before it asks Sonarr to grab anything.
 
-It is **dry-run by default**. It does not delete media files, call Sonarr DELETE endpoints, or control your download client directly. In live mode, the script sends the selected release to Sonarr and lets Sonarr handle its normal download/import/replacement workflow.
+It is **dry-run by default**. The script does not call Sonarr DELETE endpoints or control your download client directly. In live mode, it sends the selected release to Sonarr; after a successful download/import, **Sonarr may replace the existing episode file as part of its normal upgrade workflow**.
 
 ## Why use it?
 
@@ -88,7 +88,7 @@ This is useful for Docker, cron and Synology Task Scheduler.
 | --- | --- | --- |
 | `SONARR_URL` | `http://127.0.0.1:8989` | Sonarr URL |
 | `SONARR_KEY` | none | Sonarr API key (required) |
-| `SONARR_SEARCHES_PER_RUN` | `50` | Maximum interactive searches per execution |
+| `SONARR_SEARCHES_PER_RUN` | `10` | Maximum interactive searches per execution |
 | `SONARR_OPTIMIZER_STATE` | state JSON beside the script | State-file location |
 | `SONARR_DAILY_SEARCH_BUDGET` | `400` | Maximum optimizer searches per live day |
 | `SONARR_MIN_SEEDERS` | `1` | Minimum known seeders |
