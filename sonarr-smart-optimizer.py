@@ -1240,135 +1240,89 @@ def main():
 
     print()
 
-    print("Loading next items from persistent A-Z queue...")
-    selected = next_work_items(state, queued_ids, remaining)
+    print("Loading persistent A-Z queue...")
+    if not state.get("work_queue"):
+        initialize_work_queue(state)
+    append_new_series(state)
 
-    print()
-    print("Queued episodes selected for this run:", len(selected))
-    print("Queue position: %d / %d" % (
-        int(state.get("work_cursor", 0)),
-        len(state.get("work_queue", []))
-    ))
-    print()
-
-    if not selected:
-        print("Nothing currently needs an optimizer search.")
-        return
-
+    target_replacements = remaining
     searches = 0
     grabs = 0
     no_match = 0
     errors = 0
+    number = 0
 
-    for number, item in enumerate(selected, 1):
+    # requested count means successful smaller replacements, not queue entries.
+    # Keep walking from the saved cursor until that many releases are sent,
+    # the real daily interactive-search budget is exhausted, or the queue ends.
+    while grabs < target_replacements:
+        actual_left = max(0, DAILY_SEARCH_BUDGET + DAILY_EXTRA_BUDGET - searches_used_today(state))
+        if LIVE and actual_left <= 0:
+            print("Daily interactive-search budget exhausted before target replacements were found.", flush=True)
+            break
+
+        selected = next_work_items(state, queued_ids, 1)
+        if not selected:
+            break
+
+        item = selected[0]
+        number += 1
         print("-" * 68)
-
         describe_item(number, item)
-
         episode_id = item["episode_id"]
 
         try:
-            # THIS is the expensive interactive indexer search.
             print("    SEARCHING SONARR NOW...", flush=True)
-            releases = get(
-                "/release?episodeId=%d"
-                % episode_id,
-                timeout=45
-            )
-
+            releases = get("/release?episodeId=%d" % episode_id, timeout=45)
             searches += 1
-
             if LIVE:
                 increment_search_count(state)
-                mark_episode_searched(
-                    state,
-                    episode_id
-                )
-
-                # Save immediately so a crash/restart does not
-                # accidentally reset our search budget.
+                mark_episode_searched(state, episode_id)
                 save_state(state)
-
         except Exception as e:
             errors += 1
-            print("    SEARCH ERROR:", e)
+            print("    SEARCH ERROR:", e, flush=True)
             print()
             continue
 
-        choice = choose_best(
-            item,
-            releases,
-            state
-        )
-
+        choice = choose_best(item, releases, state)
         if not choice:
             no_match += 1
-            print("    KEEP CURRENT: no qualifying replacement.")
+            print("    KEEP CURRENT: no qualifying replacement.", flush=True)
             print()
             continue
 
         describe_choice(choice)
 
         if not LIVE:
-            print("    DRY RUN: WOULD GRAB")
+            grabs += 1
+            print("    DRY RUN: WOULD GRAB", flush=True)
+            print("    TARGET FOUND: %d / %d" % (grabs, target_replacements), flush=True)
             print()
             continue
-
-        # ----------------------------------------------------
-        # SAFETY CHECK AGAIN immediately before grabbing.
-        # ----------------------------------------------------
 
         try:
             fresh_queue = active_episode_ids()
-
             if episode_id in fresh_queue:
-                print(
-                    "    SKIP: episode entered Sonarr queue "
-                    "while we were evaluating it."
-                )
+                print("    SKIP: episode entered Sonarr queue while we were evaluating it.", flush=True)
                 print()
                 continue
-
         except Exception as e:
-            print(
-                "    SKIP: could not perform final queue safety check:",
-                e
-            )
+            print("    SKIP: could not perform final queue safety check:", e, flush=True)
             print()
             continue
 
         try:
-            # The ONLY Sonarr write operation used to initiate
-            # replacement.
-            #
-            # NO DELETE.
-            # NO filesystem manipulation.
-            # NO direct Deluge manipulation.
-            post(
-                "/release",
-                choice["release"]
-            )
-
+            post("/release", choice["release"])
             grabs += 1
-
-            mark_release_attempted(
-                state,
-                choice["release"]
-            )
-
+            mark_release_attempted(state, choice["release"])
             save_state(state)
-
-            print("    LIVE: RELEASE SENT TO SONARR")
-            print(
-                "    Existing episode remains until Sonarr "
-                "successfully downloads and imports replacement."
-            )
-
-
+            print("    LIVE: RELEASE SENT TO SONARR", flush=True)
+            print("    TARGET FOUND: %d / %d" % (grabs, target_replacements), flush=True)
+            print("    Existing episode remains until Sonarr successfully downloads and imports replacement.")
         except Exception as e:
             errors += 1
-            print("    GRAB ERROR:", e)
-
+            print("    GRAB ERROR:", e, flush=True)
         print()
 
     print("=" * 68)
