@@ -17,8 +17,8 @@ from datetime import datetime, timezone
 # Live    = --live
 #
 # IMPORTANT:
-# - NEVER deletes media files
-# - NEVER calls Sonarr DELETE endpoints
+# - This script NEVER calls Sonarr DELETE endpoints directly
+# - In live mode Sonarr may replace an existing file after importing a selected release
 # - NEVER touches Deluge directly
 # - Sonarr performs normal Completed Download Handling/import
 # - Search budgets are configurable; defaults are conservative for scheduled use
@@ -32,14 +32,17 @@ from datetime import datetime, timezone
 # Check the URL if Sonarr is not on the same machine, then review
 # SEARCHES_PER_RUN plus NORMAL_PROFILE_ID and UHD_PROFILE_ID below.
 SONARR_URL_DEFAULT = "http://127.0.0.1:8989"
-SEARCHES_PER_RUN = 50
+SEARCHES_PER_RUN = 10
 
 SONARR_URL = os.environ.get("SONARR_URL", SONARR_URL_DEFAULT).rstrip("/")
 API_KEY = os.environ.get("SONARR_KEY", "").strip()
 SEARCHES_PER_RUN = int(os.environ.get("SONARR_SEARCHES_PER_RUN", SEARCHES_PER_RUN))
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-STATE_FILE = os.environ.get(\n    "SONARR_OPTIMIZER_STATE",\n    os.path.join(SCRIPT_DIR, "sonarr-smart-optimizer-state.json")\n)
+STATE_FILE = os.environ.get(
+    "SONARR_OPTIMIZER_STATE",
+    os.path.join(SCRIPT_DIR, "sonarr-smart-optimizer-state.json")
+)
 
 NORMAL_PROFILE_ID = 4
 UHD_PROFILE_ID = 5
@@ -461,8 +464,6 @@ def dynamic_range_allowed(existing_hdr, candidate_range):
     return True
 
 
-def hdr_from_text(text):
-    return dynamic_range_from_text(text) in ("HDR", "DV_HDR")
 
 def hdr_from_media_info(media):
     if not media:
@@ -608,22 +609,6 @@ def active_episode_ids():
 # ============================================================
 # LOCAL LIBRARY CANDIDATES
 # ============================================================
-
-def cooldown_for(item):
-    if item["resolution"] < item["target_resolution"]:
-        return COOLDOWN_RESOLUTION_UPGRADE
-
-    if item["profile_id"] == UHD_PROFILE_ID:
-        return COOLDOWN_4K
-
-    if item["codec"] != "x265":
-        return COOLDOWN_X264
-
-    if item["size_mib"] <= COMPACT_1080P_X265_MIB:
-        return COOLDOWN_X265_COMPACT
-
-    return COOLDOWN_X265_LARGE
-
 
 def priority_score(item):
     """
@@ -1208,7 +1193,7 @@ def main():
     if LIVE:
         print("MODE: LIVE")
     else:
-        print("MODE: DRY RUN -- NOTHING WILL BE DOWNLOADED")
+        print("MODE: DRY RUN -- NO RELEASES WILL BE GRABBED")
 
     print("Daily interactive-search budget:", DAILY_SEARCH_BUDGET)
     print("Minimum same-resolution saving: %.1f%%" % MIN_SAVING_PERCENT)
@@ -1441,8 +1426,8 @@ def main():
     if not LIVE:
         print()
         print(
-            "DRY RUN COMPLETE -- no downloads, deletions, "
-            "or persistent cooldown changes were made."
+            "DRY RUN COMPLETE -- no releases were grabbed and "
+            "no persistent cooldown changes were made."
         )
 
 
