@@ -46,14 +46,13 @@ No third-party Python packages are required.
 
 ## Quick start
 
-This is designed to be **download, edit, run**.
+This is designed to be **download, configure, run**.
 
 1. Download `sonarr-smart-optimizer.py`.
-2. Open it in any text editor.
-3. Near the top, paste your Sonarr API key into `SONARR_API_KEY`.
-4. Set `SEARCHES_PER_RUN` to the maximum number of interactive searches you want each run (default: `50`).
-5. **Review `NORMAL_PROFILE_ID` and `UHD_PROFILE_ID`** and make sure they match your Sonarr quality-profile IDs.
-6. Save the file and run:
+2. Set your API key in the `SONARR_KEY` environment variable.
+3. Set `SONARR_SEARCHES_PER_RUN` if you want to change the default maximum of `50` interactive searches per run.
+4. **Review `NORMAL_PROFILE_ID` and `UHD_PROFILE_ID`** in the script and make sure they match your Sonarr quality-profile IDs.
+5. Run:
 
 ```sh
 python3 sonarr-smart-optimizer.py
@@ -71,13 +70,9 @@ Live mode can ask Sonarr to grab releases.
 
 ### Where to find the API key
 
-In Sonarr, open **Settings → General → Security → API Key**. Copy that value into `SONARR_API_KEY` near the top of the script.
+In Sonarr, open **Settings → General → Security → API Key**. The optimizer intentionally does **not** provide a source-code field for the key. Pass it through the `SONARR_KEY` environment variable or a protected wrapper/key file instead.
 
-You do **not** need to edit the Python code anywhere else for a normal setup.
-
-### Optional: environment variables
-
-If you prefer not to put the API key in the script, environment variables still override the quick-setup values:
+### Environment variables
 
 ```sh
 export SONARR_KEY='YOUR_API_KEY'
