@@ -950,15 +950,27 @@ def evaluate_release(item, release, state):
         * 100.0
     )
 
-    # Storage-first policy applies to EVERY replacement, including
-    # 1080p -> 2160p when the series is assigned to the UHD profile.
-    # Every candidate must save meaningful space, while an extreme
-    # reduction is rejected as a compression/quality-risk guardrail.
-    if saving < MIN_SAVING_PERCENT:
-        return None
+    # Same-resolution replacements must save 5-50%.
+    # The only size-growth exception is an explicit UHD-profile upgrade
+    # from an existing 1080p file to a 2160p candidate: that candidate may
+    # be the same size or at most 10% larger. Smaller 4K candidates remain
+    # subject to the 50% maximum-saving guardrail.
+    is_uhd_upgrade = (
+        item["profile_id"] == UHD_PROFILE_ID
+        and old_res == 1080
+        and new_res == 2160
+    )
 
-    if saving > MAX_SAVING_PERCENT:
-        return None
+    if is_uhd_upgrade:
+        if saving < -10.0:
+            return None
+        if saving > MAX_SAVING_PERCENT:
+            return None
+    else:
+        if saving < MIN_SAVING_PERCENT:
+            return None
+        if saving > MAX_SAVING_PERCENT:
+            return None
 
     # Audio protection.
     #
@@ -1149,7 +1161,8 @@ def main():
         print("MODE: DRY RUN -- NO RELEASES WILL BE GRABBED")
 
     print("Daily interactive-search budget:", DAILY_SEARCH_BUDGET)
-    print("Allowed saving window: %.1f%% to %.1f%%" % (MIN_SAVING_PERCENT, MAX_SAVING_PERCENT))
+    print("Same-resolution saving window: %.1f%% to %.1f%%" % (MIN_SAVING_PERCENT, MAX_SAVING_PERCENT))
+    print("UHD-profile 1080p -> 2160p exception: candidate may be up to 10% larger")
     print()
 
     used = searches_used_today(state)
