@@ -184,7 +184,9 @@ def blank_state():
         "daily": {},
         "work_queue": [],
         "work_cursor": 0,
-        "known_series_ids": []
+        "known_series_ids": [],
+        "series_queue": [],
+        "series_cursor": 0
     }
 
 
@@ -203,6 +205,8 @@ def load_state():
         state.setdefault("work_queue", [])
         state.setdefault("work_cursor", 0)
         state.setdefault("known_series_ids", [])
+        state.setdefault("series_queue", [])
+        state.setdefault("series_cursor", 0)
 
         return state
 
@@ -745,30 +749,23 @@ def _episode_sort_key(ep):
 
 
 def initialize_work_queue(state):
-    """One-time A-Z snapshot. Later additions are appended, never inserted."""
+    """Fast one-time A-Z series queue. Episodes are loaded lazily per series."""
     series_list = get("/series")
     ordered = sorted(series_list, key=lambda s: ((s.get("title") or "").casefold(), int(s.get("id", 0))))
-    queue = []
-    for n, series in enumerate(ordered, 1):
-        try:
-            episodes = get("/episode?seriesId=%d" % int(series["id"]))
-        except Exception as e:
-            print("WARNING: Could not preload series:", series.get("title"), e, flush=True)
-            continue
-        for ep in sorted(episodes, key=_episode_sort_key):
-            if ep.get("hasFile") and ep.get("episodeFileId"):
-                queue.append(_queue_entry(series, ep))
-        if n % 25 == 0:
-            print("    PRELOADING A-Z QUEUE: %d / %d series" % (n, len(ordered)), flush=True)
-    state["work_queue"] = queue
+    state["series_queue"] = [
+        {"series_id": int(s["id"]), "series_title": s.get("title", "")}
+        for s in ordered if s.get("id")
+    ]
+    state["series_cursor"] = 0
+    state["work_queue"] = []
     state["work_cursor"] = 0
-    state["known_series_ids"] = [int(s["id"]) for s in series_list if s.get("id")]
+    state["known_series_ids"] = [x["series_id"] for x in state["series_queue"]]
     save_state(state)
-    print("A-Z work queue preloaded:", len(queue), "episodes", flush=True)
+    print("A-Z series queue created:", len(state["series_queue"]), "series", flush=True)
 
 
 def append_new_series(state):
-    """Cheap per-run discovery: one /series call; only new series need episode reads."""
+    """One cheap /series read; newly added series go at the END."""
     series_list = get("/series")
     known = set(int(x) for x in state.get("known_series_ids", []))
     added = 0
@@ -776,21 +773,50 @@ def append_new_series(state):
         sid = int(series.get("id", 0) or 0)
         if not sid or sid in known:
             continue
-        try:
-            episodes = get("/episode?seriesId=%d" % sid)
-        except Exception as e:
-            print("WARNING: Could not append new series:", series.get("title"), e, flush=True)
-            continue
-        entries = [_queue_entry(series, ep) for ep in sorted(episodes, key=_episode_sort_key)
-                   if ep.get("hasFile") and ep.get("episodeFileId")]
-        state["work_queue"].extend(entries)
+        state.setdefault("series_queue", []).append({
+            "series_id": sid,
+            "series_title": series.get("title", "")
+        })
         known.add(sid)
-        added += len(entries)
-        print("APPENDED NEW SERIES TO END:", series.get("title"), "(%d episodes)" % len(entries), flush=True)
+        added += 1
+        print("APPENDED NEW SERIES TO END:", series.get("title"), flush=True)
     state["known_series_ids"] = sorted(known)
     if added:
         save_state(state)
     return added
+
+
+def load_next_series_episodes(state):
+    """Load episodes for only ONE series when the cursor reaches it."""
+    sq = state.get("series_queue", [])
+    sc = int(state.get("series_cursor", 0))
+    if sc >= len(sq):
+        return False
+    series = sq[sc]
+    sid = int(series["series_id"])
+    try:
+        episodes = get("/episode?seriesId=%d" % sid)
+    except Exception as e:
+        print("WARNING: Could not load series:", series.get("series_title"), e, flush=True)
+        state["series_cursor"] = sc + 1
+        save_state(state)
+        return True
+    entries = [
+        {
+            "series_id": sid,
+            "series_title": series.get("series_title", ""),
+            "episode_id": int(ep["id"]),
+            "season": int(ep.get("seasonNumber", 0)),
+            "episode": int(ep.get("episodeNumber", 0)),
+        }
+        for ep in sorted(episodes, key=_episode_sort_key)
+        if ep.get("hasFile") and ep.get("episodeFileId")
+    ]
+    state.setdefault("work_queue", []).extend(entries)
+    state["series_cursor"] = sc + 1
+    save_state(state)
+    print("LOADED:", series.get("series_title"), "-", len(entries), "episodes", flush=True)
+    return True
 
 
 def item_from_queue_entry(entry, queued_ids, state):
@@ -845,25 +871,31 @@ def item_from_queue_entry(entry, queued_ids, state):
 
 
 def next_work_items(state, queued_ids, limit):
-    if not state.get("work_queue"):
-        print("Building persistent A-Z queue once. Future runs resume instantly.", flush=True)
+    if not state.get("series_queue"):
+        print("Creating persistent A-Z series queue once...", flush=True)
         initialize_work_queue(state)
     append_new_series(state)
 
-    queue = state.get("work_queue", [])
-    cursor = int(state.get("work_cursor", 0))
     selected = []
-    while cursor < len(queue) and len(selected) < limit:
+    while len(selected) < limit:
+        queue = state.get("work_queue", [])
+        cursor = int(state.get("work_cursor", 0))
+
+        if cursor >= len(queue):
+            if not load_next_series_episodes(state):
+                break
+            continue
+
         entry = queue[cursor]
-        cursor += 1
+        state["work_cursor"] = cursor + 1
+        if LIVE:
+            save_state(state)
+
         item = item_from_queue_entry(entry, queued_ids, state)
         if item is not None:
             selected.append(item)
-        if LIVE:
-            state["work_cursor"] = cursor
-            save_state(state)
 
-    if cursor >= len(queue) and not selected:
+    if not selected and int(state.get("series_cursor", 0)) >= len(state.get("series_queue", [])):
         print("A-Z queue pass complete. No queued work remains.", flush=True)
     return selected
 
@@ -1241,7 +1273,7 @@ def main():
     print()
 
     print("Loading persistent A-Z queue...")
-    if not state.get("work_queue"):
+    if not state.get("series_queue"):
         initialize_work_queue(state)
     append_new_series(state)
 
