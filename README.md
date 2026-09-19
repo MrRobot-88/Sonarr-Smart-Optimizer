@@ -22,12 +22,21 @@ It is aimed at people who want to reduce storage use without simply lowering eve
 - Remembers search attempts in a local state file.
 - Runs at most two optimizer search cycles per episode, with a 180-day wait before the second cycle.
 
+## Prowlarr / indexers
+
+This project was developed and tested with **Prowlarr** managing the indexers used by Sonarr.
+
+For the setup documented here, **Prowlarr is recommended and expected**: configure your indexers in Prowlarr and sync them to Sonarr before running the optimizer.
+
+The optimizer itself does **not** connect to the Prowlarr API and does not need a Prowlarr API key. It asks Sonarr for available releases through Sonarr's normal API, so Sonarr continues to use the indexers supplied by Prowlarr and keeps its normal rejection rules in control.
+
 ## Requirements
 
 - Sonarr v4 with its API reachable from the machine running the script.
 - Python 3.8+.
 - Your Sonarr API key.
-- Indexers/download clients already configured normally in Sonarr/Prowlarr.
+- Prowlarr configured with your indexers and synced to Sonarr.
+- A download client already configured normally in Sonarr.
 
 No third-party Python packages are required.
 
