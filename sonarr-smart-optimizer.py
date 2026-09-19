@@ -120,7 +120,7 @@ def mib(value):
         return 0.0
 
 
-def api(method, path, data=None):
+def api(method, path, data=None, timeout=120):
     url = SONARR_URL + "/api/v3" + path
 
     headers = {
@@ -142,7 +142,7 @@ def api(method, path, data=None):
     )
 
     try:
-        with urllib.request.urlopen(req, timeout=120) as response:
+        with urllib.request.urlopen(req, timeout=timeout) as response:
             raw = response.read()
 
             if not raw:
@@ -164,8 +164,8 @@ def api(method, path, data=None):
         )
 
 
-def get(path):
-    return api("GET", path)
+def get(path, timeout=120):
+    return api("GET", path, timeout=timeout)
 
 
 def post(path, data):
@@ -1294,9 +1294,11 @@ def main():
 
         try:
             # THIS is the expensive interactive indexer search.
+            print("    SEARCHING SONARR NOW...", flush=True)
             releases = get(
                 "/release?episodeId=%d"
-                % episode_id
+                % episode_id,
+                timeout=45
             )
 
             searches += 1
