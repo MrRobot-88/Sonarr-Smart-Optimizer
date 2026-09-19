@@ -4,6 +4,12 @@ A small Python tool that searches your **existing Sonarr library** for smaller r
 
 It is **dry-run by default**. It does not delete media files, call Sonarr DELETE endpoints, or control your download client directly. In live mode, the script sends the selected release to Sonarr and lets Sonarr handle its normal download/import/replacement workflow.
 
+## Why use it?
+
+Over time a Sonarr library can end up with releases that are much larger than necessary. This optimizer revisits existing episode files and looks for smaller alternatives **without intentionally trading away the media properties it is designed to protect**.
+
+It is aimed at people who want to reduce storage use without simply lowering every quality profile or manually searching thousands of episodes.
+
 ## What it protects
 
 - Avoids resolution downgrades.
