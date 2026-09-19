@@ -46,31 +46,54 @@ No third-party Python packages are required.
 
 ## Quick start
 
-Download `sonarr-smart-optimizer.py`, then set your API key:
+This is designed to be **download, edit, run**.
+
+1. Download `sonarr-smart-optimizer.py`.
+2. Open it in any text editor.
+3. Near the top, paste your Sonarr API key into `SONARR_API_KEY`.
+4. Set `SEARCHES_PER_RUN` to the maximum number of interactive searches you want each run (default: `50`).
+5. **Review `NORMAL_PROFILE_ID` and `UHD_PROFILE_ID`** and make sure they match your Sonarr quality-profile IDs.
+6. Save the file and run:
 
 ```sh
-export SONARR_KEY='YOUR_API_KEY'
 python3 sonarr-smart-optimizer.py
 ```
 
-The command above is a **dry run**. Read the results first.
+That is a **dry run**. It will show what it would choose without starting downloads or changing persistent optimizer state.
 
-When you are satisfied with the choices it makes:
+When the dry-run results look right:
 
 ```sh
 python3 sonarr-smart-optimizer.py --live
 ```
 
-Live mode can start downloads through Sonarr, so use dry-run first.
+Live mode can ask Sonarr to grab releases.
+
+### Where to find the API key
+
+In Sonarr, open **Settings → General → Security → API Key**. Copy that value into `SONARR_API_KEY` near the top of the script.
+
+You do **not** need to edit the Python code anywhere else for a normal setup.
+
+### Optional: environment variables
+
+If you prefer not to put the API key in the script, environment variables still override the quick-setup values:
+
+```sh
+export SONARR_KEY='YOUR_API_KEY'
+export SONARR_SEARCHES_PER_RUN=50
+python3 sonarr-smart-optimizer.py
+```
+
+This is useful for Docker, cron and Synology Task Scheduler.
 
 ## Configuration
-
-Environment variables keep secrets and machine-specific settings out of the script:
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `SONARR_URL` | `http://127.0.0.1:8989` | Sonarr URL |
 | `SONARR_KEY` | none | Sonarr API key (required) |
+| `SONARR_SEARCHES_PER_RUN` | `50` | Maximum interactive searches per execution |
 | `SONARR_OPTIMIZER_STATE` | state JSON beside the script | State-file location |
 | `SONARR_DAILY_SEARCH_BUDGET` | `400` | Maximum optimizer searches per live day |
 | `SONARR_MIN_SEEDERS` | `1` | Minimum known seeders |
