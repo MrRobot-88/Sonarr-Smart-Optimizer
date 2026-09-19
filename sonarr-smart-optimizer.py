@@ -181,7 +181,10 @@ def blank_state():
         "version": 1,
         "episodes": {},
         "attempted_releases": {},
-        "daily": {}
+        "daily": {},
+        "work_queue": [],
+        "work_cursor": 0,
+        "known_series_ids": []
     }
 
 
@@ -197,6 +200,9 @@ def load_state():
         state.setdefault("episodes", {})
         state.setdefault("attempted_releases", {})
         state.setdefault("daily", {})
+        state.setdefault("work_queue", [])
+        state.setdefault("work_cursor", 0)
+        state.setdefault("known_series_ids", [])
 
         return state
 
@@ -724,142 +730,142 @@ def priority_score(item):
 
     return score
 
-def collect_candidates(state, queued_ids):
+def _queue_entry(series, ep):
+    return {
+        "series_id": int(series["id"]),
+        "series_title": series.get("title", ""),
+        "episode_id": int(ep["id"]),
+        "season": int(ep.get("seasonNumber", 0)),
+        "episode": int(ep.get("episodeNumber", 0)),
+    }
+
+
+def _episode_sort_key(ep):
+    return (int(ep.get("seasonNumber", 0)), int(ep.get("episodeNumber", 0)), int(ep.get("id", 0)))
+
+
+def initialize_work_queue(state):
+    """One-time A-Z snapshot. Later additions are appended, never inserted."""
     series_list = get("/series")
-
-    candidates = []
-
-    total_series = len(series_list)
-
-    print("Reading local Sonarr library metadata...")
-    print("Series:", total_series)
-    print()
-
-    for index, series in enumerate(series_list, 1):
-        profile_id = int(series.get("qualityProfileId", 0))
-
-        if profile_id not in (
-            NORMAL_PROFILE_ID,
-            UHD_PROFILE_ID
-        ):
-            continue
-
-        series_id = int(series["id"])
-
-        target = (
-            2160
-            if profile_id == UHD_PROFILE_ID
-            else 1080
-        )
-
+    ordered = sorted(series_list, key=lambda s: ((s.get("title") or "").casefold(), int(s.get("id", 0))))
+    queue = []
+    for n, series in enumerate(ordered, 1):
         try:
-            episodes = get(
-                "/episode?seriesId=%d" % series_id
-            )
-
-            files = get(
-                "/episodefile?seriesId=%d" % series_id
-            )
-
+            episodes = get("/episode?seriesId=%d" % int(series["id"]))
         except Exception as e:
-            print(
-                "WARNING: Could not inspect series:",
-                series.get("title"),
-                e
-            )
+            print("WARNING: Could not preload series:", series.get("title"), e, flush=True)
             continue
+        for ep in sorted(episodes, key=_episode_sort_key):
+            if ep.get("hasFile") and ep.get("episodeFileId"):
+                queue.append(_queue_entry(series, ep))
+        if n % 25 == 0:
+            print("    PRELOADING A-Z QUEUE: %d / %d series" % (n, len(ordered)), flush=True)
+    state["work_queue"] = queue
+    state["work_cursor"] = 0
+    state["known_series_ids"] = [int(s["id"]) for s in series_list if s.get("id")]
+    save_state(state)
+    print("A-Z work queue preloaded:", len(queue), "episodes", flush=True)
 
-        files_by_id = {
-            int(f["id"]): f
-            for f in files
-            if f.get("id")
-        }
 
-        for ep in episodes:
-            episode_id = int(ep.get("id", 0))
+def append_new_series(state):
+    """Cheap per-run discovery: one /series call; only new series need episode reads."""
+    series_list = get("/series")
+    known = set(int(x) for x in state.get("known_series_ids", []))
+    added = 0
+    for series in series_list:
+        sid = int(series.get("id", 0) or 0)
+        if not sid or sid in known:
+            continue
+        try:
+            episodes = get("/episode?seriesId=%d" % sid)
+        except Exception as e:
+            print("WARNING: Could not append new series:", series.get("title"), e, flush=True)
+            continue
+        entries = [_queue_entry(series, ep) for ep in sorted(episodes, key=_episode_sort_key)
+                   if ep.get("hasFile") and ep.get("episodeFileId")]
+        state["work_queue"].extend(entries)
+        known.add(sid)
+        added += len(entries)
+        print("APPENDED NEW SERIES TO END:", series.get("title"), "(%d episodes)" % len(entries), flush=True)
+    state["known_series_ids"] = sorted(known)
+    if added:
+        save_state(state)
+    return added
 
-            if not episode_id:
-                continue
 
-            # Optimize existing files regardless of Sonarr
-            # monitored/unmonitored status.
-            if not ep.get("hasFile", False):
-                continue
+def item_from_queue_entry(entry, queued_ids, state):
+    """Load metadata only for the next queued episode, never the whole library."""
+    episode_id = int(entry["episode_id"])
+    if episode_id in queued_ids:
+        return None
+    hist = state.get("episodes", {}).get(str(episode_id), {})
+    cycles = int(hist.get("search_cycles", 0))
+    last_search = hist.get("last_search")
+    if cycles >= 2 or (cycles == 1 and last_search and age_days(last_search) < 180):
+        return None
+    try:
+        series = get("/series/%d" % int(entry["series_id"]))
+        ep = get("/episode/%d" % episode_id)
+    except Exception as e:
+        print("    SKIP metadata error:", entry.get("series_title"), "S%02dE%02d" % (entry.get("season",0),entry.get("episode",0)), e, flush=True)
+        return None
+    if not ep.get("hasFile") or not ep.get("episodeFileId"):
+        return None
+    profile_id = int(series.get("qualityProfileId", 0))
+    if profile_id not in (NORMAL_PROFILE_ID, UHD_PROFILE_ID):
+        return None
+    try:
+        file_obj = get("/episodefile/%d" % int(ep["episodeFileId"]))
+    except Exception as e:
+        print("    SKIP file metadata error:", e, flush=True)
+        return None
+    resolution = file_resolution(file_obj)
+    if not resolution:
+        return None
+    media = file_obj.get("mediaInfo") or {}
+    target = 2160 if profile_id == UHD_PROFILE_ID else 1080
+    return {
+        "series_id": int(series["id"]),
+        "series_title": series.get("title", entry.get("series_title", "")),
+        "episode_id": episode_id,
+        "season": int(ep.get("seasonNumber", entry.get("season", 0))),
+        "episode": int(ep.get("episodeNumber", entry.get("episode", 0))),
+        "episode_title": ep.get("title", ""),
+        "profile_id": profile_id,
+        "target_resolution": target,
+        "file": file_obj,
+        "resolution": resolution,
+        "size_mib": mib(file_obj.get("size", 0)),
+        "codec": current_codec(file_obj),
+        "audio_channels": current_audio_channels(media),
+        "hdr": hdr_from_media_info(media),
+        "cooldown_days": 180,
+        "priority": 0,
+    }
 
-            # NEVER search while replacement/download exists.
-            if episode_id in queued_ids:
-                continue
 
-            file_id = ep.get("episodeFileId")
+def next_work_items(state, queued_ids, limit):
+    if not state.get("work_queue"):
+        print("Building persistent A-Z queue once. Future runs resume instantly.", flush=True)
+        initialize_work_queue(state)
+    append_new_series(state)
 
-            if not file_id:
-                continue
+    queue = state.get("work_queue", [])
+    cursor = int(state.get("work_cursor", 0))
+    selected = []
+    while cursor < len(queue) and len(selected) < limit:
+        entry = queue[cursor]
+        cursor += 1
+        item = item_from_queue_entry(entry, queued_ids, state)
+        if item is not None:
+            selected.append(item)
+        if LIVE:
+            state["work_cursor"] = cursor
+            save_state(state)
 
-            file_obj = files_by_id.get(int(file_id))
-
-            if not file_obj:
-                continue
-
-            resolution = file_resolution(file_obj)
-
-            if not resolution:
-                continue
-
-            size_mib = mib(file_obj.get("size", 0))
-            codec = current_codec(file_obj)
-            media = file_obj.get("mediaInfo") or {}
-
-            item = {
-                "series_id": series_id,
-                "series_title": series.get("title", ""),
-                "episode_id": episode_id,
-                "season": int(ep.get("seasonNumber", 0)),
-                "episode": int(ep.get("episodeNumber", 0)),
-                "episode_title": ep.get("title", ""),
-                "profile_id": profile_id,
-                "target_resolution": target,
-                "file": file_obj,
-                "resolution": resolution,
-                "size_mib": size_mib,
-                "codec": codec,
-                "audio_channels": current_audio_channels(media),
-                "hdr": hdr_from_media_info(media),
-            }
-
-            # Optimizer search-cycle policy:
-            #   cycle 0: eligible now
-            #   cycle 1: wait at least 180 days
-            #   cycle 2: permanently excluded from this optimizer.
-            #
-            # Old last_search entries without search_cycles do NOT
-            # count toward the new two-cycle system.
-            episode_state = state.get(
-                "episodes", {}
-            ).get(str(episode_id), {})
-
-            cycles = int(episode_state.get("search_cycles", 0))
-            last_search = episode_state.get("last_search")
-
-            if cycles >= 2:
-                continue
-
-            if cycles == 1 and last_search and age_days(last_search) < 180:
-                continue
-
-            item["cooldown_days"] = 180
-            item["priority"] = priority_score(item)
-
-            candidates.append(item)
-
-    candidates.sort(
-        key=lambda x: (
-            x["priority"],
-            x["size_mib"]
-        ),
-        reverse=True
-    )
-
-    return candidates
+    if cursor >= len(queue) and not selected:
+        print("A-Z queue pass complete. No queued work remains.", flush=True)
+    return selected
 
 
 # ============================================================
@@ -1234,51 +1240,20 @@ def main():
 
     print()
 
-    candidates = collect_candidates(
-        state,
-        queued_ids
-    )
+    print("Loading next items from persistent A-Z queue...")
+    selected = next_work_items(state, queued_ids, remaining)
 
     print()
-    print(
-        "Eligible local optimization candidates:",
-        len(candidates)
-    )
+    print("Queued episodes selected for this run:", len(selected))
+    print("Queue position: %d / %d" % (
+        int(state.get("work_cursor", 0)),
+        len(state.get("work_queue", []))
+    ))
+    print()
 
-    if not candidates:
+    if not selected:
         print("Nothing currently needs an optimizer search.")
         return
-
-    # Only high-priority candidates get an indexer search,
-    # but one large series must not consume the whole budget.
-    selected = []
-    per_series = {}
-
-    for item in candidates:
-        series_id = item["series_id"]
-
-        used_for_series = per_series.get(series_id, 0)
-
-        if used_for_series >= MAX_SEARCHES_PER_SERIES_PER_RUN:
-            continue
-
-        selected.append(item)
-        per_series[series_id] = used_for_series + 1
-
-        if len(selected) >= remaining:
-            break
-
-    print()
-    print(
-        "Highest-priority episodes selected for this run:",
-        len(selected)
-    )
-
-    print(
-        "Maximum searches from one series this run:",
-        MAX_SEARCHES_PER_SERIES_PER_RUN
-    )
-    print()
 
     searches = 0
     grabs = 0
