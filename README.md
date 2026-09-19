@@ -126,3 +126,11 @@ Existing old state entries without `search_cycles` do not automatically count as
 This project was built for cautious library optimization, but release metadata is not perfect. Test with dry-run on your own library before enabling `--live`.
 
 Looking for movies instead? See **Radarr Smart Optimizer**: https://github.com/MrRobot-88/Radarr-Smart-Optimizer
+
+
+## Related projects
+
+- https://github.com/MrRobot-88/Sonarr-Smart-Optimizer
+- https://github.com/MrRobot-88/Radarr-Smart-Optimizer
+- https://github.com/MrRobot-88/Deluge-Smart-Cleanup
+
