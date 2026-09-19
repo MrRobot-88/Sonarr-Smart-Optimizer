@@ -30,6 +30,10 @@ For the setup documented here, **Prowlarr is recommended and expected**: configu
 
 The optimizer itself does **not** connect to the Prowlarr API and does not need a Prowlarr API key. It asks Sonarr for available releases through Sonarr's normal API, so Sonarr continues to use the indexers supplied by Prowlarr and keeps its normal rejection rules in control.
 
+## Indexers and Prowlarr
+
+This project was developed and tested with **Prowlarr** managing the indexers used by Sonarr/Radarr. **Prowlarr is not required.** The optimizer does not communicate with Prowlarr directly; it asks Sonarr/Radarr for releases through their normal API, so you can use Prowlarr or another indexer setup supported by Sonarr/Radarr.
+
 ## Requirements
 
 - Sonarr v4 with its API reachable from the machine running the script.
