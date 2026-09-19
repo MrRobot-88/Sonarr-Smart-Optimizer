@@ -49,7 +49,8 @@ UHD_PROFILE_ID = 5
 
 DAILY_SEARCH_BUDGET = 400
 MIN_SEEDERS = 1
-MIN_SAVING_PERCENT = 5.0
+MIN_SAVING_PERCENT = float(os.environ.get("SONARR_MIN_SAVING_PERCENT", "5.0"))
+MAX_SAVING_PERCENT = float(os.environ.get("SONARR_MAX_SAVING_PERCENT", "50.0"))
 
 
 # Don't deliberately grab the exact same release again for this long
@@ -60,10 +61,6 @@ ATTEMPT_COOLDOWN_DAYS = 365
 LARGE_1080P_MIB = 1800
 COMPACT_1080P_X265_MIB = 1200
 LARGE_2160P_MIB = 6000
-
-# Hard ceiling for a 1080p -> 2160p resolution upgrade.
-# 8 GiB = 8192 MiB.
-MAX_4K_UPGRADE_MIB = 8192
 
 # Prevent one large series from consuming the whole daily budget.
 MAX_SEARCHES_PER_SERIES_PER_RUN = 3
@@ -942,50 +939,6 @@ def evaluate_release(item, release, state):
     if not dynamic_range_allowed(item["hdr"], dynamic_range):
         return None
 
-    # --------------------------------------------------------
-    # HIGHER RESOLUTION
-    # --------------------------------------------------------
-
-    if new_res > old_res:
-
-        # 1080p -> 2160p is allowed only up to 8 GiB/episode.
-        if (
-            old_res <= 1080
-            and new_res == 2160
-            and new_size > MAX_4K_UPGRADE_MIB
-        ):
-            return None
-
-        # Protect known audio even when gaining resolution.
-        old_audio = item["audio_channels"]
-
-        if old_audio is not None:
-            if candidate_audio is None:
-                return None
-
-            if candidate_audio < old_audio:
-                return None
-
-        # Existing HDR must not become SDR/unknown merely
-        # because the candidate has higher resolution.
-        
-
-        return {
-            "release": release,
-            "resolution": new_res,
-            "size_mib": new_size,
-            "codec": codec,
-            "audio": candidate_audio,
-            "hdr": candidate_hdr,
-            "dynamic_range": dynamic_range,
-            "saving_percent": None,
-            "reason": "resolution upgrade"
-        }
-
-    # --------------------------------------------------------
-    # SAME RESOLUTION
-    # --------------------------------------------------------
-
     old_size = item["size_mib"]
 
     if old_size <= 0:
@@ -997,8 +950,14 @@ def evaluate_release(item, release, state):
         * 100.0
     )
 
-    # Must actually save meaningful space.
+    # Storage-first policy applies to EVERY replacement, including
+    # 1080p -> 2160p when the series is assigned to the UHD profile.
+    # Every candidate must save meaningful space, while an extreme
+    # reduction is rejected as a compression/quality-risk guardrail.
     if saving < MIN_SAVING_PERCENT:
+        return None
+
+    if saving > MAX_SAVING_PERCENT:
         return None
 
     # Audio protection.
@@ -1190,7 +1149,7 @@ def main():
         print("MODE: DRY RUN -- NO RELEASES WILL BE GRABBED")
 
     print("Daily interactive-search budget:", DAILY_SEARCH_BUDGET)
-    print("Minimum same-resolution saving: %.1f%%" % MIN_SAVING_PERCENT)
+    print("Allowed saving window: %.1f%% to %.1f%%" % (MIN_SAVING_PERCENT, MAX_SAVING_PERCENT))
     print()
 
     used = searches_used_today(state)
