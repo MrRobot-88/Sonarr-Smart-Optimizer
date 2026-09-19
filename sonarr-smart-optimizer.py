@@ -25,25 +25,18 @@ from datetime import datetime, timezone
 # ============================================================
 
 # ============================================================
-# QUICK SETUP - most users only need to edit this block
+# QUICK SETUP
 # ============================================================
-# 1) Paste your Sonarr API key below.
-# 2) Check the URL if Sonarr is not on the same machine.
-# 3) Set how many interactive searches this script may do per run.
-# 4) IMPORTANT: review NORMAL_PROFILE_ID and UHD_PROFILE_ID below.
-#
-# Environment variables still work and override these values, which is
-# useful for Docker, cron and Synology Task Scheduler.
-SONARR_API_KEY = "PASTE_YOUR_SONARR_API_KEY_HERE"
+# API keys are intentionally NOT stored in this source file.
+# Set SONARR_KEY in your environment or use a protected wrapper/key file.
+# Check the URL if Sonarr is not on the same machine, then review
+# SEARCHES_PER_RUN plus NORMAL_PROFILE_ID and UHD_PROFILE_ID below.
 SONARR_URL_DEFAULT = "http://127.0.0.1:8989"
 SEARCHES_PER_RUN = 50
 
 SONARR_URL = os.environ.get("SONARR_URL", SONARR_URL_DEFAULT).rstrip("/")
-API_KEY = os.environ.get("SONARR_KEY", SONARR_API_KEY).strip()
+API_KEY = os.environ.get("SONARR_KEY", "").strip()
 SEARCHES_PER_RUN = int(os.environ.get("SONARR_SEARCHES_PER_RUN", SEARCHES_PER_RUN))
-
-if API_KEY == "PASTE_YOUR_SONARR_API_KEY_HERE":
-    API_KEY = ""
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 STATE_FILE = os.environ.get(\n    "SONARR_OPTIMIZER_STATE",\n    os.path.join(SCRIPT_DIR, "sonarr-smart-optimizer-state.json")\n)
@@ -83,7 +76,7 @@ LIVE = "--live" in sys.argv
 if not API_KEY:
     print("ERROR: Sonarr API key is not configured.")
     print()
-    print("Edit SONARR_API_KEY near the top of this script, or set SONARR_KEY.")
+    print("Set SONARR_KEY in your environment or protected wrapper/key file.")
     print("Then run: python3 sonarr-smart-optimizer.py")
     sys.exit(1)
 
