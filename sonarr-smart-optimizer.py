@@ -51,6 +51,30 @@ DAILY_SEARCH_BUDGET = 400
 MIN_SEEDERS = 1
 MIN_SAVING_PERCENT = float(os.environ.get("SONARR_MIN_SAVING_PERCENT", "5.0"))
 MAX_SAVING_PERCENT = float(os.environ.get("SONARR_MAX_SAVING_PERCENT", "50.0"))
+CONTROL_FILE = os.environ.get("SMART_OPTIMIZER_CONTROL", os.path.join(SCRIPT_DIR, "smart-optimizer-control.json"))
+
+def load_runtime_controls():
+    controls = {}
+    try:
+        with open(CONTROL_FILE, "r", encoding="utf-8") as f:
+            controls = (json.load(f) or {}).get("sonarr", {})
+    except Exception:
+        pass
+    today = datetime.now().strftime("%Y-%m-%d")
+    try:
+        minimum = float(controls.get("min_saving_percent", MIN_SAVING_PERCENT))
+        maximum = float(controls.get("max_saving_percent", MAX_SAVING_PERCENT))
+        if not (0 <= minimum <= maximum <= 100):
+            raise ValueError
+    except (TypeError, ValueError):
+        minimum, maximum = MIN_SAVING_PERCENT, MAX_SAVING_PERCENT
+    try:
+        extra = int((controls.get("daily_extra") or {}).get(today, 0))
+    except (TypeError, ValueError):
+        extra = 0
+    return minimum, maximum, max(0, extra)
+
+MIN_SAVING_PERCENT, MAX_SAVING_PERCENT, DAILY_EXTRA_BUDGET = load_runtime_controls()
 
 
 # Don't deliberately grab the exact same release again for this long
@@ -1160,7 +1184,7 @@ def main():
     else:
         print("MODE: DRY RUN -- NO RELEASES WILL BE GRABBED")
 
-    print("Daily interactive-search budget:", DAILY_SEARCH_BUDGET)
+    print("Daily interactive-search budget:", DAILY_SEARCH_BUDGET + DAILY_EXTRA_BUDGET, "(base %d + today override %d)" % (DAILY_SEARCH_BUDGET, DAILY_EXTRA_BUDGET))
     print("Same-resolution saving window: %.1f%% to %.1f%%" % (MIN_SAVING_PERCENT, MAX_SAVING_PERCENT))
     print("UHD-profile 1080p -> 2160p exception: candidate may be up to 10% larger")
     print()
@@ -1173,7 +1197,7 @@ def main():
     if LIVE:
         remaining = min(
             PER_RUN_SEARCH_BUDGET,
-            max(0, DAILY_SEARCH_BUDGET - used)
+            max(0, DAILY_SEARCH_BUDGET + DAILY_EXTRA_BUDGET - used)
         )
     else:
         # Dry run does NOT consume persistent budget.
