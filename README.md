@@ -1,5 +1,9 @@
 # Sonarr Smart Optimizer
 
+> ## Smart Optimizer UI (easiest Docker setup)
+> Prefer a container with web-based API setup? Use [Smart Optimizer UI](https://github.com/MrRobot-88/Smart-Optimizer-UI). It bundles both Sonarr and Radarr optimizers, and the Radarr/Sonarr host, port, and API keys are configured from the browser instead of editing this standalone setup.
+
+
 A small Python tool that searches your **existing Sonarr library** for smaller replacement releases while applying safety checks before it asks Sonarr to grab anything.
 
 It is **dry-run by default**. The script does not call Sonarr DELETE endpoints or control your download client directly. In live mode, it sends the selected release to Sonarr; after a successful download/import, **Sonarr may replace the existing episode file as part of its normal upgrade workflow**.
