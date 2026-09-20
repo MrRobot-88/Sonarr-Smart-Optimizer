@@ -1276,20 +1276,21 @@ def main():
         initialize_work_queue(state)
     append_new_series(state)
 
-    target_replacements = remaining
+    target_searches = remaining
     searches = 0
     grabs = 0
     no_match = 0
     errors = 0
     number = 0
 
-    # requested count means successful smaller replacements, not queue entries.
-    # Keep walking from the saved cursor until that many releases are sent,
-    # the real daily interactive-search budget is exhausted, or the queue ends.
-    while grabs < target_replacements:
+    # The requested count is the number of ACTUAL interactive searches.
+    # Scheduled and manual runs consume the same persistent queue/cursor.
+    # Ineligible queue entries may be skipped, but each /release lookup counts
+    # exactly once toward this run's requested search quota.
+    while searches < target_searches:
         actual_left = max(0, DAILY_SEARCH_BUDGET + DAILY_EXTRA_BUDGET - searches_used_today(state))
         if LIVE and actual_left <= 0:
-            print("Daily interactive-search budget exhausted before target replacements were found.", flush=True)
+            print("Daily interactive-search budget exhausted.", flush=True)
             break
 
         selected = next_work_items(state, queued_ids, 1)
@@ -1306,6 +1307,7 @@ def main():
             print("    SEARCHING SONARR NOW...", flush=True)
             releases = get("/release?episodeId=%d" % episode_id, timeout=45)
             searches += 1
+            print("    SEARCH PROGRESS: %d / %d" % (searches, target_searches), flush=True)
             if LIVE:
                 increment_search_count(state)
                 mark_episode_searched(state, episode_id)
@@ -1328,7 +1330,7 @@ def main():
         if not LIVE:
             grabs += 1
             print("    DRY RUN: WOULD GRAB", flush=True)
-            print("    TARGET FOUND: %d / %d" % (grabs, target_replacements), flush=True)
+            print("    QUALIFYING REPLACEMENTS FOUND: %d" % grabs, flush=True)
             print()
             continue
 
@@ -1349,7 +1351,7 @@ def main():
             mark_release_attempted(state, choice["release"])
             save_state(state)
             print("    LIVE: RELEASE SENT TO SONARR", flush=True)
-            print("    TARGET FOUND: %d / %d" % (grabs, target_replacements), flush=True)
+            print("    QUALIFYING REPLACEMENTS FOUND: %d" % grabs, flush=True)
             print("    Existing episode remains until Sonarr successfully downloads and imports replacement.")
         except Exception as e:
             errors += 1
