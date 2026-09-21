@@ -1481,13 +1481,6 @@ def main():
 
         if not LIVE:
             grabs += 1
-
-            if LIVE and TARGET_GRABS > 0:
-                print(
-                    "    UPGRADE GRABBED: %d / %d"
-                    % (grabs, TARGET_GRABS),
-                    flush=True
-                )
             print("    DRY RUN: WOULD GRAB", flush=True)
             print("    QUALIFYING REPLACEMENTS FOUND: %d" % grabs, flush=True)
             print()
