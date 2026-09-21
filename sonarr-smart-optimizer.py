@@ -1375,7 +1375,7 @@ def main():
 
     print("Daily interactive-search budget:", DAILY_SEARCH_BUDGET + DAILY_EXTRA_BUDGET, "(base %d + today override %d)" % (DAILY_SEARCH_BUDGET, DAILY_EXTRA_BUDGET))
     print("Same-resolution saving window: %.1f%% to %.1f%%" % (MIN_SAVING_PERCENT, MAX_SAVING_PERCENT))
-    print("UHD-profile 1080p -> 2160p exception: candidate may be up to 10% larger")
+    print("Low-resolution upgrade rule: current <1080p may upgrade toward profile target with max +50% size growth")
     print()
 
     used = searches_used_today(state)
@@ -1435,10 +1435,12 @@ def main():
     errors = 0
     number = 0
 
-    # The requested count is the number of ACTUAL interactive searches.
     # Scheduled and manual runs consume the same persistent queue/cursor.
-    # Ineligible queue entries may be skipped, but each /release lookup counts
-    # exactly once toward this run's requested search quota.
+    # Normal/scheduled runs remain search-budget based.
+    # When SMART_OPTIMIZER_TARGET_GRABS is set by the UI, the requested number
+    # represents successful releases sent to Sonarr. Unsuccessful searches do
+    # not satisfy that target, but every /release lookup still consumes the
+    # normal daily/per-run search budget.
     while searches < target_searches and (TARGET_GRABS <= 0 or grabs < TARGET_GRABS):
         actual_left = max(0, DAILY_SEARCH_BUDGET + DAILY_EXTRA_BUDGET - searches_used_today(state))
         if LIVE and actual_left <= 0:
