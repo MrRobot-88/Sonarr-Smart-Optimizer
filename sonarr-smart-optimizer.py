@@ -91,6 +91,17 @@ MAX_SEARCHES_PER_SERIES_PER_RUN = 3
 
 LIVE = "--live" in sys.argv
 
+# Manual UI mode:
+# Number entered in the UI means SUCCESSFUL upgrades/grabs,
+# not number of indexer searches.
+try:
+    TARGET_GRABS = max(
+        0,
+        int(os.environ.get("SMART_OPTIMIZER_TARGET_GRABS", "0"))
+    )
+except (TypeError, ValueError):
+    TARGET_GRABS = 0
+
 if not API_KEY:
     print("ERROR: Sonarr API key is not configured.")
     print()
@@ -382,11 +393,11 @@ def audio_channels_from_text(text):
     text = (text or "").lower()
 
     patterns = [
-        (7.1, r"\b7[\s._-]?1\b"),
-        (5.1, r"\b5[\s._-]?1\b"),
-        (2.1, r"\b2[\s._-]?1\b"),
-        (2.0, r"\b2[\s._-]?0\b"),
-        (1.0, r"\b1[\s._-]?0\b"),
+        (7.1, r"(?<!\d)7[\s._-]?1\b"),
+        (5.1, r"(?<!\d)5[\s._-]?1\b"),
+        (2.1, r"(?<!\d)2[\s._-]?1\b"),
+        (2.0, r"(?<!\d)2[\s._-]?0\b"),
+        (1.0, r"(?<!\d)1[\s._-]?0\b"),
     ]
 
     for channels, pattern in patterns:
@@ -404,6 +415,12 @@ DANGEROUS_EXTENSIONS = (
     "pif", "vbs", "js", "jar", "ps1"
 )
 
+
+
+def atmos_from_text(text):
+    """Return True when a release title explicitly identifies Dolby Atmos."""
+    text = str(text or "")
+    return bool(re.search(r"(?i)(?<![A-Za-z0-9])atmos(?![A-Za-z0-9])", text))
 
 def dangerous_release_title(text):
     """
@@ -463,34 +480,51 @@ def dynamic_range_from_text(text):
     return "SDR_UNKNOWN"
 
 
-def dynamic_range_allowed(existing_hdr, candidate_range):
+def dynamic_range_allowed(existing_range, candidate_range):
     """
-    Dynamic-range replacement policy.
+    Shared Sonarr/Radarr dynamic-range policy.
 
-    Candidate SDR_UNKNOWN means the release title does not explicitly
-    advertise HDR/DV. For selection purposes it is allowed exactly like
-    ordinary SDR UNLESS the existing file is positively known to be HDR.
-
-    Rules:
-      existing SDR/unknown -> SDR_UNKNOWN : ALLOW
-      existing SDR/unknown -> HDR         : ALLOW
-      existing SDR/unknown -> DV_HDR      : ALLOW
-
-      existing HDR         -> SDR_UNKNOWN : BLOCK
-      existing HDR         -> HDR         : ALLOW
-      existing HDR         -> DV_HDR      : ALLOW
-
-      DV_ONLY is ALWAYS blocked.
+    SDR/unknown -> SDR/HDR/DV+HDR : ALLOW
+    HDR         -> HDR/DV+HDR     : ALLOW
+    DV+HDR      -> DV+HDR only    : ALLOW
+    DV-only candidate             : NEVER
     """
 
     if candidate_range == "DV_ONLY":
         return False
 
-    if existing_hdr and candidate_range == "SDR_UNKNOWN":
-        return False
+    if existing_range == "DV_HDR":
+        return candidate_range == "DV_HDR"
 
-    return True
+    if existing_range == "HDR":
+        return candidate_range in ("HDR", "DV_HDR")
 
+    return candidate_range in ("SDR_UNKNOWN", "HDR", "DV_HDR")
+
+
+def current_dynamic_range(file_obj):
+    """
+    Determine the existing file's dynamic range conservatively using
+    Sonarr MediaInfo plus scene name/path fallback.
+    """
+    media = file_obj.get("mediaInfo") or {}
+
+    pieces = []
+
+    for key in (
+        "videoDynamicRange",
+        "videoDynamicRangeType",
+        "videoCodec",
+        "videoProfile"
+    ):
+        value = media.get(key)
+        if value:
+            pieces.append(str(value))
+
+    pieces.append(str(file_obj.get("sceneName", "")))
+    pieces.append(str(file_obj.get("relativePath", "")))
+
+    return dynamic_range_from_text(" ".join(pieces))
 
 
 def hdr_from_media_info(media):
@@ -869,10 +903,26 @@ def item_from_queue_entry(entry, queued_ids, state):
         "size_mib": mib(file_obj.get("size", 0)),
         "codec": current_codec(file_obj),
         "audio_channels": current_audio_channels(media),
-        "hdr": hdr_from_media_info(media),
+        "dynamic_range": current_dynamic_range(file_obj),
+        "hdr": current_dynamic_range(file_obj) in ("HDR", "DV_HDR"),
         "cooldown_days": 180,
         "priority": 0,
     }
+
+
+def optimizer_excluded_series_ids():
+    try:
+        with open(CONTROL_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+
+        raw = (data.get("sonarr", {}) or {}).get("exclusions") or []
+        return {
+            int(x.get("id"))
+            for x in raw
+            if isinstance(x, dict) and x.get("id") is not None
+        }
+    except Exception:
+        return set()
 
 
 def next_work_items(state, queued_ids, limit):
@@ -899,6 +949,16 @@ def next_work_items(state, queued_ids, limit):
 
         item = item_from_queue_entry(entry, queued_ids, state)
         if item is not None:
+            # Exclusion applies to the ENTIRE Sonarr series.
+            # Skip every episode before any interactive /release search.
+            if int(item.get("series_id", 0)) in optimizer_excluded_series_ids():
+                print(
+                    "    EXCLUDED SERIES: %s -- episode skipped without searching"
+                    % (item.get("series_title") or "Unknown series"),
+                    flush=True
+                )
+                continue
+
             selected.append(item)
 
     return selected
@@ -995,14 +1055,28 @@ def evaluate_release(item, release, state):
         return None
 
     codec = codec_from_text(title)
-    candidate_audio = audio_channels_from_text(title)
 
+    # HARD COMPATIBILITY RULE:
+    # AV1 replacements are disabled because the configured playback
+    # environment is not guaranteed to support AV1.
+    if codec == "av1":
+        print("    CODEC RULE: AV1 | REJECT: AV1 not allowed", flush=True)
+        return None
+
+    candidate_audio = audio_channels_from_text(title)
+    candidate_atmos = atmos_from_text(title)
+
+    # Atmos is a preference, not a hard preservation requirement.
+    # Losing Atmos is allowed as long as the channel-layout rule below passes.
     dynamic_range = dynamic_range_from_text(title)
     candidate_hdr = dynamic_range in ("HDR", "DV_HDR")
 
     # HARD RULE:
     # Dolby Vision without an explicit HDR fallback is rejected.
-    if not dynamic_range_allowed(item["hdr"], dynamic_range):
+    if not dynamic_range_allowed(
+        item.get("dynamic_range", "HDR" if item.get("hdr") else "SDR_UNKNOWN"),
+        dynamic_range
+    ):
         return None
 
     old_size = item["size_mib"]
@@ -1016,27 +1090,76 @@ def evaluate_release(item, release, state):
         * 100.0
     )
 
-    # Same-resolution replacements must save 5-50%.
-    # The only size-growth exception is an explicit UHD-profile upgrade
-    # from an existing 1080p file to a 2160p candidate: that candidate may
-    # be the same size or at most 10% larger. Smaller 4K candidates remain
-    # subject to the 50% maximum-saving guardrail.
-    is_uhd_upgrade = (
-        item["profile_id"] == UHD_PROFILE_ID
-        and old_res == 1080
-        and new_res == 2160
+    # Tiny tolerance prevents floating-point conversion noise from rejecting
+    # a candidate exactly on a configured boundary.
+    SAVING_EPSILON = 1e-6
+
+    # LOW-RESOLUTION UPGRADE RULE -- SONARR ONLY
+    #
+    # Existing SD/480p/720p episodes may upgrade toward the resolution wanted
+    # by their Sonarr profile. The replacement may be smaller, equal-sized,
+    # or at most 50% larger than the existing episode.
+    #
+    # Example:
+    #   720p 1.2 GiB -> 1080p 700 MiB  = PASS
+    #   720p 1.2 GiB -> 1080p 1.8 GiB  = PASS
+    #   720p 1.2 GiB -> 1080p 3.5 GiB  = REJECT
+    #
+    # This exception does NOT apply to 1080p -> 2160p.
+    is_lowres_upgrade = (
+        old_res < 1080
+        and new_res > old_res
+        and new_res <= target
     )
 
-    if is_uhd_upgrade:
-        if saving < -10.0:
+    if is_lowres_upgrade:
+        MAX_LOWRES_UPGRADE_INCREASE_PERCENT = 50.0
+        max_upgrade_size = old_size * (
+            1.0 + MAX_LOWRES_UPGRADE_INCREASE_PERCENT / 100.0
+        )
+
+        increase = (
+            ((new_size - old_size) / old_size) * 100.0
+        )
+
+        if new_size > max_upgrade_size + SAVING_EPSILON:
+            print(
+                "    LOW-RES UPGRADE SIZE RULE: %.3f%% size change | "
+                "maximum +%.1f%% | REJECT"
+                % (increase, MAX_LOWRES_UPGRADE_INCREASE_PERCENT),
+                flush=True
+            )
             return None
-        if saving > MAX_SAVING_PERCENT:
-            return None
+
+        print(
+            "    LOW-RES UPGRADE SIZE RULE: %.3f%% size change | "
+            "maximum +%.1f%% | PASS"
+            % (increase, MAX_LOWRES_UPGRADE_INCREASE_PERCENT),
+            flush=True
+        )
+
     else:
-        if saving < MIN_SAVING_PERCENT:
+        if saving < MIN_SAVING_PERCENT - SAVING_EPSILON:
+            print(
+                "    SIZE RULE: %.3f%% saving | allowed %.1f%%-%.1f%% | REJECT: below minimum"
+                % (saving, MIN_SAVING_PERCENT, MAX_SAVING_PERCENT),
+                flush=True
+            )
             return None
-        if saving > MAX_SAVING_PERCENT:
+
+        if saving > MAX_SAVING_PERCENT + SAVING_EPSILON:
+            print(
+                "    SIZE RULE: %.3f%% saving | allowed %.1f%%-%.1f%% | REJECT: above maximum"
+                % (saving, MIN_SAVING_PERCENT, MAX_SAVING_PERCENT),
+                flush=True
+            )
             return None
+
+        print(
+            "    SIZE RULE: %.3f%% saving | allowed %.1f%%-%.1f%% | PASS"
+            % (saving, MIN_SAVING_PERCENT, MAX_SAVING_PERCENT),
+            flush=True
+        )
 
     # Audio protection.
     #
@@ -1048,7 +1171,14 @@ def evaluate_release(item, release, state):
         if candidate_audio is None:
             return None
 
-        if candidate_audio < old_audio:
+        # HARD AUDIO RULE:
+        # Never replace multichannel audio (5.1/7.1/etc.) with stereo.
+        # Moving between multichannel layouts, e.g. 7.1 -> 5.1, is allowed.
+        if old_audio > 2.0 and candidate_audio <= 2.0:
+            print(
+                "    AUDIO RULE: multichannel -> stereo | REJECT",
+                flush=True
+            )
             return None
 
     # HDR/DV protection at BOTH 1080p and 2160p.
@@ -1064,6 +1194,7 @@ def evaluate_release(item, release, state):
         "size_mib": new_size,
         "codec": codec,
         "audio": candidate_audio,
+        "atmos": candidate_atmos,
         "hdr": candidate_hdr,
         "dynamic_range": dynamic_range,
         "saving_percent": saving,
@@ -1089,40 +1220,56 @@ def choose_best(item, releases, state):
 
     old_res = item["resolution"]
 
+    # A valid higher-resolution candidate still wins for the UHD profile.
+    # Quality preferences below only rank candidates inside that resolution
+    # tier and therefore do not change the existing resolution policy.
     higher = [
         x for x in valid
         if x["resolution"] > old_res
     ]
 
-    if higher:
-        # Higher resolution wins.
-        #
-        # Within that resolution:
-        # x265 preferred, then smaller file.
-        higher.sort(
-            key=lambda x: (
-                x["resolution"],
-                1 if x["codec"] == "x265" else 0,
-                -x["size_mib"]
-            ),
-            reverse=True
-        )
+    pool = higher if higher else [
+        x for x in valid
+        if x["resolution"] == old_res
+    ]
 
-        return higher[0]
+    if not pool:
+        return None
 
-    # Same resolution:
+    # All candidates here already passed the hard safety gates.
     #
-    # Smaller file is the main purpose.
-    # x265 breaks close/equal choices rather than allowing a
-    # larger x265 to beat a smaller x264.
-    valid.sort(
-        key=lambda x: (
-            x["size_mib"],
-            0 if x["codec"] == "x265" else 1
-        )
-    )
+    # Preference order for already-valid Sonarr candidates:
+    #   1. Dynamic range: DV+HDR > HDR > SDR/unknown
+    #   2. Atmos when available (preference only, never mandatory)
+    #   3. Multichannel audio preference
+    #   4. Smaller file when preferred quality is otherwise equal
+    #   5. x265/HEVC
+    #
+    # AUDIO POLICY -- SONARR ONLY:
+    #   stereo -> stereo/5.1/7.1 = allowed
+    #   5.1/7.1 -> stereo       = NEVER
+    #   7.1 -> 5.1              = allowed
+    #   Atmos -> non-Atmos      = allowed
+    #   non-Atmos -> Atmos      = preferred when otherwise suitable
+    #
+    # LOW-RESOLUTION POLICY -- SONARR ONLY:
+    # Current resolution below 1080p may upgrade toward the profile target.
+    # Candidate may be smaller, equal-size, or at most +50% larger.
+    dr_rank = {
+        "DV_HDR": 3,
+        "HDR": 2,
+        "SDR_UNKNOWN": 1
+    }
 
-    return valid[0]
+    pool.sort(key=lambda x: (
+        -dr_rank.get(x.get("dynamic_range", "SDR_UNKNOWN"), 0),
+        -int(bool(x.get("atmos", False))),
+        -(x.get("audio") or 0),
+        x["size_mib"],
+        0 if x["codec"] == "x265" else 1
+    ))
+
+    return pool[0]
 
 
 # ============================================================
@@ -1292,7 +1439,7 @@ def main():
     # Scheduled and manual runs consume the same persistent queue/cursor.
     # Ineligible queue entries may be skipped, but each /release lookup counts
     # exactly once toward this run's requested search quota.
-    while searches < target_searches:
+    while searches < target_searches and (TARGET_GRABS <= 0 or grabs < TARGET_GRABS):
         actual_left = max(0, DAILY_SEARCH_BUDGET + DAILY_EXTRA_BUDGET - searches_used_today(state))
         if LIVE and actual_left <= 0:
             print("Daily interactive-search budget exhausted.", flush=True)
@@ -1334,6 +1481,13 @@ def main():
 
         if not LIVE:
             grabs += 1
+
+            if LIVE and TARGET_GRABS > 0:
+                print(
+                    "    UPGRADE GRABBED: %d / %d"
+                    % (grabs, TARGET_GRABS),
+                    flush=True
+                )
             print("    DRY RUN: WOULD GRAB", flush=True)
             print("    QUALIFYING REPLACEMENTS FOUND: %d" % grabs, flush=True)
             print()
@@ -1353,6 +1507,13 @@ def main():
         try:
             post("/release", choice["release"])
             grabs += 1
+
+            if LIVE and TARGET_GRABS > 0:
+                print(
+                    "    UPGRADE GRABBED: %d / %d"
+                    % (grabs, TARGET_GRABS),
+                    flush=True
+                )
             mark_release_attempted(state, choice["release"])
             save_state(state)
             print("    LIVE: RELEASE SENT TO SONARR", flush=True)
