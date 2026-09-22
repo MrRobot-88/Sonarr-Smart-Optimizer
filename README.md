@@ -14,8 +14,10 @@ It is **dry-run by default**. The script never calls Sonarr DELETE endpoints and
 - Optimizer-only exclusions apply to an **entire series** and are checked before interactive release searches.
 - No resolution downgrade.
 - Same-resolution replacements use the configured minimum/maximum saving window.
-- **Low-resolution upgrade rule (Sonarr only):** when the current episode is below 1080p, a higher-resolution candidate up to the profile target may be smaller, equal-sized or at most **50% larger** than the current episode.
-- That +50% exception does **not** apply to 1080p → 2160p.
+- Current episode files below **400 MiB** are skipped before an interactive release search.
+- Existing 1080p and 2160p files never grow for another release at the same resolution.
+- **Low-resolution upgrade rule (Sonarr only):** when the current episode is below 1080p, a higher-resolution candidate up to the profile target may be smaller, equal-sized or at most **40% larger** than the current episode.
+- That +40% exception does **not** apply to 1080p → 2160p.
 - AV1 candidates are rejected.
 - Dolby Vision-only candidates without HDR fallback are rejected.
 - Existing HDR/Dolby Vision state is protected by the dynamic-range rules.
@@ -24,7 +26,10 @@ It is **dry-run by default**. The script never calls Sonarr DELETE endpoints and
 - Candidate ranking prefers dynamic range, Atmos, channel count, smaller size and then x265 among candidates that already passed hard safety gates.
 - Search history, queue position and attempted releases are persisted.
 - At most two optimizer search cycles per episode, with a 180-day wait before the second cycle.
-- Manual UI mode can use `SMART_OPTIMIZER_TARGET_GRABS`: the requested number represents successful releases sent to Sonarr, while the normal search budget remains the ceiling.
+- Manual UI mode can use `SMART_OPTIMIZER_TARGET_GRABS`: the requested number represents successful releases sent to Sonarr.
+- `SMART_OPTIMIZER_EPISODE_ID` targets one episode directly.
+- `SMART_OPTIMIZER_SERIES_ID` targets one series directly without consuming the normal persistent A-Z queue.
+- `SMART_OPTIMIZER_MANUAL_TARGET=1` marks an explicit Manual Optimizer run so normal daily-search accounting is not consumed.
 
 ## Requirements
 
@@ -69,7 +74,10 @@ In Sonarr, the API key is under **Settings → General → Security → API Key*
 | `SONARR_MIN_SAVING_PERCENT` | `5` | Minimum same-resolution saving |
 | `SONARR_MAX_SAVING_PERCENT` | `50` | Maximum same-resolution saving / quality-risk guardrail |
 | `SMART_OPTIMIZER_CONTROL` | control JSON beside script | Optional shared runtime controls/exclusions |
-| `SMART_OPTIMIZER_TARGET_GRABS` | `0` | Manual/UI target; 0 keeps normal search-count behavior |
+| `SMART_OPTIMIZER_TARGET_GRABS` | `0` | Maximum successful grabs for targeted/manual UI runs |
+| `SMART_OPTIMIZER_EPISODE_ID` | unset | Target one Sonarr episode directly |
+| `SMART_OPTIMIZER_SERIES_ID` | unset | Target one Sonarr series directly |
+| `SMART_OPTIMIZER_MANUAL_TARGET` | `0` | Mark an explicit Manual Optimizer run so it does not consume normal daily-search accounting |
 
 The standalone script's base daily search budget is currently **400** searches. The shared control file can supply date-scoped temporary extra searches and override the min/max saving window.
 
@@ -83,8 +91,8 @@ Examples for a 720p episode currently using 1.2 GiB:
 
 - 1080p at 700 MiB: allowed by the size rule
 - 1080p at 1.2 GiB: allowed by the size rule
-- 1080p at 1.8 GiB: allowed at the exact +50% ceiling
-- 1080p above 1.8 GiB: rejected by the low-resolution size rule
+- 1080p at 1.68 GiB: allowed at the exact +40% ceiling
+- 1080p above 1.68 GiB: rejected by the low-resolution size rule
 
 All other hard safety checks still apply. This exception is deliberately **not shared with Radarr**.
 
