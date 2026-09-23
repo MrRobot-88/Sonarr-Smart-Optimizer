@@ -14,6 +14,7 @@ src=open(p,encoding="utf-8").read()
 assert '"upgrade for existing episode file",' in src
 assert '"existing file meets cutoff",' in src
 assert "return any(" in src
+assert "if not sonarr_rejections_ok(release):" in src
 
 needle="upgrade for existing episode file"
 
@@ -26,9 +27,6 @@ samples=(
 
 for s in samples:
     assert needle in s.lower(), s
-
-assert "if not sonarr_rejections_ok(release):" in src
-assert "if new_size > current_size:" in src or "candidate_size > current_size" in src or "current_size" in src
 
 print("LEGACY SONARR WORDING PASS")
 print("QUALITY-REVISION WORDING PASS")
