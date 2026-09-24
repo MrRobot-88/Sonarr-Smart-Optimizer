@@ -12,18 +12,16 @@ It is **dry-run by default**. The script never calls Sonarr DELETE endpoints and
 - Persistent **A-Z series queue** and persistent episode work queue/cursor.
 - Newly added series are appended to the end instead of reordering existing work.
 - Optimizer-only exclusions apply to an **entire series** and are checked before interactive release searches.
-- No resolution downgrade.
-- Same-resolution replacements use the configured minimum/maximum saving window.
 - Current episode files below **400 MiB** are skipped before an interactive release search.
-- Existing 1080p and 2160p files never grow for another release at the same resolution.
-- **Low-resolution upgrade rule (Sonarr only):** when the current episode is below 1080p, a higher-resolution candidate up to the profile target may be smaller, equal-sized or at most **40% larger** than the current episode.
-- That +40% exception does **not** apply to 1080p → 2160p.
+- **TorrentLeech-first selection:** if at least one valid TorrentLeech result exists in the same Sonarr release search, only that valid TorrentLeech pool is ranked. Other indexers are fallback only when no valid TorrentLeech candidate exists.
+- **Normal 1080p is storage-first:** the smallest valid 1080p release wins. HDR, Atmos and channel count do not make a larger normal 1080p release win.
+- **720p upgrade rule:** an existing 720p episode may upgrade only to 1080p, never to another 720p or directly to 2160p. The 1080p replacement may grow by at most **40%**.
+- Existing 1080p and 2160p replacements must be **strictly smaller** than the current file and must satisfy the configured minimum saving. Downsizing is hard-capped at **40%** even if a higher maximum is configured.
+- On the UHD profile, candidates must be 2160p and advertise at least HDR. Ranking prefers **DV+HDR**, then HDR, then Atmos, then the smaller file.
+- Season packs and multi-episode releases are rejected for single-episode optimization.
 - AV1 candidates are rejected.
 - Dolby Vision-only candidates without HDR fallback are rejected.
-- Existing HDR/Dolby Vision state is protected by the dynamic-range rules.
-- Multichannel → stereo is rejected; multichannel-to-multichannel changes such as 7.1 → 5.1 are allowed.
-- Atmos is a preference rather than a hard preservation requirement.
-- Candidate ranking prefers dynamic range, Atmos, channel count, smaller size and then x265 among candidates that already passed hard safety gates.
+- Immediately before a live grab, the optimizer revalidates the current episode file ID, byte size, resolution and quality profile so a stale search result cannot replace a changed file.
 - Search history, queue position and attempted releases are persisted.
 - At most two optimizer search cycles per episode, with a 180-day wait before the second cycle.
 - Manual UI mode can use `SMART_OPTIMIZER_TARGET_GRABS`: the requested number represents successful releases sent to Sonarr.
@@ -72,7 +70,7 @@ In Sonarr, the API key is under **Settings → General → Security → API Key*
 | `SONARR_SEARCHES_PER_RUN` | `10` | Maximum interactive searches per normal execution |
 | `SONARR_OPTIMIZER_STATE` | state JSON beside script | Persistent optimizer state |
 | `SONARR_MIN_SAVING_PERCENT` | `5` | Minimum same-resolution saving |
-| `SONARR_MAX_SAVING_PERCENT` | `50` | Maximum same-resolution saving / quality-risk guardrail |
+| `SONARR_MAX_SAVING_PERCENT` | `50` | Configured maximum saving; the v2 engine also applies an absolute 40% hard ceiling |
 | `SMART_OPTIMIZER_CONTROL` | control JSON beside script | Optional shared runtime controls/exclusions |
 | `SMART_OPTIMIZER_TARGET_GRABS` | `0` | Maximum successful grabs for targeted/manual UI runs |
 | `SMART_OPTIMIZER_EPISODE_ID` | unset | Target one Sonarr episode directly |
@@ -83,24 +81,15 @@ The standalone script's base daily search budget is currently **400** searches. 
 
 The current script uses normal profile ID `4` and UHD profile ID `5`; verify those IDs against your own Sonarr installation before live mode.
 
-## Sonarr-only low-resolution upgrade rule
+## Resolution and ranking rules
 
-For an existing episode below 1080p, Sonarr Smart Optimizer can move upward toward the resolution requested by the profile even when the replacement is not smaller.
+The only allowed size-growth case is **720p → 1080p**, with a maximum increase of 40%. A 720p episode is never replaced by another 720p release and is never sent directly to 2160p.
 
-Examples for a 720p episode currently using 1.2 GiB:
+For ordinary 1080p episodes, storage reduction is the priority: after all hard safety gates pass, the smallest valid release in the primary indexer pool wins. HDR and Atmos are allowed, but they do not outrank a smaller 1080p file.
 
-- 1080p at 700 MiB: allowed by the size rule
-- 1080p at 1.2 GiB: allowed by the size rule
-- 1080p at 1.68 GiB: allowed at the exact +40% ceiling
-- 1080p above 1.68 GiB: rejected by the low-resolution size rule
+For the UHD profile, the optimizer requires 2160p with HDR and prefers DV+HDR over plain HDR. Atmos is then a preference, followed by smaller size within the same quality tier.
 
-All other hard safety checks still apply. This exception is deliberately **not shared with Radarr**.
-
-## Dynamic range and audio
-
-The dynamic-range policy permits SDR/unknown → HDR or DV+HDR upgrades, prevents HDR → SDR/unknown, and requires DV+HDR when the existing file is already DV+HDR. DV-only candidates without HDR fallback are rejected.
-
-For audio, 5.1/7.1 → stereo is blocked. Changes between multichannel layouts are allowed, and Atmos is used as a ranking preference rather than a mandatory preservation rule.
+Every 1080p/2160p replacement must be strictly smaller than the current file. The configured minimum saving still applies, and the optimizer will not accept more than a 40% reduction in one pass.
 
 Release-title/metadata detection can be incomplete, so **dry-run against your own library/indexers before enabling live mode**.
 
